@@ -11,6 +11,7 @@ pipeline {
         AWS_ACCESS_KEY_ID = credentials('Access_key_ID')
         AWS_SECRET_ACCESS_KEY = credentials('Secret_access_key')
         AWS_REGION = "ap-south-1"
+        SCRIPTS_DIR = "/var/lib/jenkins/workspace/healthcare/jenkins-scripts"
     }
 
     stages {
@@ -35,7 +36,7 @@ pipeline {
         stage('Ensure Scripts Directory Exists') {
             steps {
                 script {
-                    sh 'mkdir -p jenkins-scripts/'
+                    sh "mkdir -p ${SCRIPTS_DIR}"
                 }
             }
         }
@@ -43,7 +44,10 @@ pipeline {
         stage('Copy Scripts to Workspace') {
             steps {
                 script {
-                    sh 'rsync -av --ignore-existing jenkins-scripts/ /var/lib/jenkins/workspace/healthcare/jenkins-scripts/'
+                    sh """
+                        rsync -av jenkins-scripts/ ${SCRIPTS_DIR}/
+                        chmod -R 755 ${SCRIPTS_DIR}/
+                    """
                 }
             }
         }
@@ -51,10 +55,10 @@ pipeline {
         stage('Install Prerequisites on Jenkins Server') {
             steps {
                 script {
-                    sh '''
-                        chmod +x /var/lib/jenkins/workspace/healthcare/jenkins-scripts/*.sh
-                        /var/lib/jenkins/workspace/healthcare/jenkins-scripts/install_dependencies.sh
-                    '''
+                    sh """
+                        chmod +x ${SCRIPTS_DIR}/*.sh
+                        ${SCRIPTS_DIR}/install_dependencies.sh
+                    """
                 }
             }
         }
@@ -62,10 +66,10 @@ pipeline {
         stage('Setup Kubernetes on Master & Worker Nodes') {
             steps {
                 script {
-                    sh '''
-                        /var/lib/jenkins/workspace/healthcare/jenkins-scripts/setup_k8s_master.sh
-                        /var/lib/jenkins/workspace/healthcare/jenkins-scripts/setup_k8s_worker.sh
-                    '''
+                    sh """
+                        ${SCRIPTS_DIR}/setup_k8s_master.sh
+                        ${SCRIPTS_DIR}/setup_k8s_worker.sh
+                    """
                 }
             }
         }
@@ -73,11 +77,14 @@ pipeline {
         stage('Configure AWS Credentials') {
             steps {
                 script {
-                    sh '''
-                        aws configure set aws_access_key_id ${AWS_ACCESS_KEY_ID}
-                        aws configure set aws_secret_access_key ${AWS_SECRET_ACCESS_KEY}
-                        aws configure set region ${AWS_REGION}
-                    '''
+                    sh """
+                        export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+                        export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+                        export AWS_REGION=${AWS_REGION}
+                        aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+                        aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+                        aws configure set region $AWS_REGION
+                    """
                 }
             }
         }
@@ -85,11 +92,11 @@ pipeline {
         stage('Terraform Init & Apply') {
             steps {
                 script {
-                    sh '''
+                    sh """
                         cd terraform
                         terraform init
                         terraform apply -auto-approve
-                    '''
+                    """
                 }
             }
         }
@@ -98,20 +105,22 @@ pipeline {
             steps {
                 script {
                     sh """
-                        echo "[k8s_master]" > ${ANSIBLE_INVENTORY}
-                        echo "<private-ip-master> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh" >> ${ANSIBLE_INVENTORY}
+                        cat <<EOF > ${ANSIBLE_INVENTORY}
+                        [k8s_master]
+                        <private-ip-master> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
 
-                        echo "[k8s_worker]" >> ${ANSIBLE_INVENTORY}
-                        echo "<private-ip-worker> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh" >> ${ANSIBLE_INVENTORY}
+                        [k8s_worker]
+                        <private-ip-worker> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
 
-                        echo "[monitoring]" >> ${ANSIBLE_INVENTORY}
-                        echo "<private-ip-monitoring> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh" >> ${ANSIBLE_INVENTORY}
+                        [monitoring]
+                        <private-ip-monitoring> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
 
-                        echo "[jenkins]" >> ${ANSIBLE_INVENTORY}
-                        echo "<private-ip-jenkins> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh" >> ${ANSIBLE_INVENTORY}
+                        [jenkins]
+                        <private-ip-jenkins> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
 
-                        echo "[all:vars]" >> ${ANSIBLE_INVENTORY}
-                        echo "ansible_ssh_common_args='-o StrictHostKeyChecking=no'" >> ${ANSIBLE_INVENTORY}
+                        [all:vars]
+                        ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+                        EOF
                     """
                 }
             }
@@ -119,13 +128,13 @@ pipeline {
 
         stage('Build with Maven') {
             steps {
-                sh '${MAVEN_PATH} clean package'
+                sh "${MAVEN_PATH} clean package"
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                sh 'docker build -t ${CONTAINER_IMAGE} .'
+                sh "docker build -t ${CONTAINER_IMAGE} ."
             }
         }
 
@@ -133,7 +142,7 @@ pipeline {
             steps {
                 script {
                     withDockerRegistry([credentialsId: 'dockerhub_cred', url: 'https://index.docker.io/v1/']) {
-                        sh 'docker push ${CONTAINER_IMAGE}'
+                        sh "docker push ${CONTAINER_IMAGE}"
                     }
                 }
             }
@@ -142,7 +151,7 @@ pipeline {
         stage('Deploy Application using Ansible') {
             steps {
                 script {
-                    sh 'ansible-playbook -i ${ANSIBLE_INVENTORY} ansible/deploy.yml'
+                    sh "ansible-playbook -i ${ANSIBLE_INVENTORY} ansible/deploy.yml"
                 }
             }
         }
