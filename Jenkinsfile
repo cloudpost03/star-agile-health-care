@@ -2,131 +2,49 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_IMAGE = "star-health"
-        DOCKER_TAG = "latest"
-        DOCKER_REGISTRY = "pravinkr11"
-        MAVEN_PATH = sh(script: 'which mvn', returnStdout: true).trim()
-        CONTAINER_IMAGE = "${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}"
-        ANSIBLE_INVENTORY = "${WORKSPACE}/inventory.ini"
-        AWS_ACCESS_KEY_ID = credentials('Access_key_ID')
-        AWS_SECRET_ACCESS_KEY = credentials('Secret_access_key')
-        AWS_REGION = "ap-south-1"
+        DOCKER_IMAGE = "pravinkr11/star-health:latest"
     }
 
     stages {
-        stage('Cleanup Workspace') {
-            steps {
-                cleanWs()
-            }
-        }
 
-        stage('Checkout Code') {
-            steps {
-                checkout([$class: 'GitSCM',
-                    branches: [[name: '*/master']],
-                    userRemoteConfigs: [[
-                        url: 'https://github.com/cloudpost03/star-agile-health-care.git',
-                        credentialsId: 'github_cred'
-                    ]]
-                ])
-            }
-        }
-
-        stage('Ensure Scripts Directory Exists') {
+        stage('Initialize') {
             steps {
                 script {
-                    sh 'mkdir -p jenkins-scripts/'
+                    echo "🚀 Starting CI/CD Pipeline..."
+                    sh 'whoami && pwd'
                 }
             }
         }
 
-        stage('Copy Scripts to Workspace') {
-            steps {
-                script {
-                    sh '''
-                        mkdir -p /var/lib/jenkins/workspace/healthcare/jenkins-scripts/
-                        rsync -av --ignore-existing jenkins-scripts/ /var/lib/jenkins/workspace/healthcare/jenkins-scripts/
-                        chmod -R 755 /var/lib/jenkins/workspace/healthcare/jenkins-scripts/
-                    '''
-                }
-            }
-        }
-    
-        stage('Install Prerequisites on Jenkins Server') {
-            steps {
-                script {
-                    sh '''
-                        chmod +x /var/lib/jenkins/workspace/healthcare/jenkins-scripts/*.sh
-                        /var/lib/jenkins/workspace/healthcare/jenkins-scripts/install_dependencies.sh
-                    '''
-                }
-            }
-        }
-
-        stage('Setup Kubernetes on Master & Worker Nodes') {
-            steps {
-                script {
-                    sh '''
-                        /var/lib/jenkins/workspace/healthcare/jenkins-scripts/install_k8s_master.sh
-                        /var/lib/jenkins/workspace/healthcare/jenkins-scripts/install_k8s_worker.sh
-                    '''
-                }
-            }
-        }
-
-        stage('Configure AWS Credentials') {
-            steps {
-                script {
-                    sh '''
-                        aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
-                        aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
-                        aws configure set region $AWS_REGION
-                    '''
-                }
-            }
-        }
-
-        stage('Terraform Init & Apply') {
-            steps {
-                script {
-                    sh '''
-                        cd terraform
-                        terraform init
-                        terraform apply -auto-approve || echo "Terraform apply failed"
-                    '''
-                }
-            }
-        }
-
-        stage('Generate Ansible Inventory') {
-            steps {
-                script {
-                    sh """
-                        cat <<EOF > ${ANSIBLE_INVENTORY}
-                        [k8s_master]
-                        <private-ip-master> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
-
-                        [k8s_worker]
-                        <private-ip-worker> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
-
-                        [monitoring]
-                        <private-ip-monitoring> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
-
-                        [jenkins]
-                        <private-ip-jenkins> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
-
-                        [all:vars]
-                        ansible_ssh_common_args='-o StrictHostKeyChecking=no'
-                        EOF
-                    """
-                }
-            }
-        }
-
-        stage('Build with Maven') {
+        stage('Install Dependencies') {
             steps {
                 sh '''
-                    ${MAVEN_PATH} clean package
+                chmod +x jenkins-scripts/*.sh
+                ./jenkins-scripts/install_dependencies.sh
+                '''
+            }
+        }
+
+        stage('Fix Docker Permissions') {
+            steps {
+                sh '''
+                sudo usermod -aG docker jenkins
+                sudo chmod 666 /var/run/docker.sock
+                '''
+            }
+        }
+
+        stage('Install Kubernetes Tools') {
+            steps {
+                sh '''
+                sudo rm -f /etc/apt/sources.list.d/kubernetes.list
+                sudo apt-get update -y
+                sudo apt-get install -y apt-transport-https ca-certificates curl
+                sudo mkdir -p /etc/apt/keyrings
+                curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.28/deb/Release.key | sudo tee /etc/apt/keyrings/kubernetes-apt-keyring.asc >/dev/null
+                echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.asc] https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list
+                sudo apt-get update -y
+                sudo apt-get install -y kubectl kubelet kubeadm
                 '''
             }
         }
@@ -134,32 +52,38 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 sh '''
-                    docker build -t ${CONTAINER_IMAGE} .
+                docker build -t $DOCKER_IMAGE .
                 '''
             }
         }
 
         stage('Push Docker Image') {
             steps {
-                script {
-                    withDockerRegistry([credentialsId: 'dockerhub_cred', url: 'https://index.docker.io/v1/']) {
-                        sh '''
-                            docker login -u ${DOCKER_REGISTRY} -p $(cat /run/secrets/dockerhub_password)
-                            docker push ${CONTAINER_IMAGE}
-                        '''
-                    }
+                withDockerRegistry([credentialsId: 'docker-hub-credentials', url: '']) {
+                    sh '''
+                    docker login -u pravinkr11 -p ${DOCKER_PASSWORD}
+                    docker push $DOCKER_IMAGE
+                    '''
                 }
             }
         }
 
-        stage('Deploy Application using Ansible') {
+        stage('Deploy to Kubernetes') {
             steps {
-                script {
-                    sh '''
-                        ansible-playbook -i ${ANSIBLE_INVENTORY} ansible/deploy.yml
-                    '''
-                }
+                sh '''
+                kubectl apply -f k8s/deployment.yaml
+                kubectl apply -f k8s/service.yaml
+                '''
             }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Pipeline executed successfully!"
+        }
+        failure {
+            echo "❌ Pipeline failed. Check logs for errors."
         }
     }
 }
