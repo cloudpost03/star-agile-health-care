@@ -32,16 +32,15 @@ pipeline {
             }
         }
 
-        stage('Ensure Scripts Directory Exists') {
-            steps {
-                script {
-                    if (!fileExists('jenkins-scripts/')) {
-                        error 'jenkins-scripts/ directory is missing! Ensure it exists in the repository.'
-                    }
-                }
+stage('Ensure Scripts Directory Exists') {
+    steps {
+        script {
+            if (!fileExists('jenkins-scripts/')) {
+                sh 'mkdir -p jenkins-scripts/'
             }
         }
-
+    }
+}
         stage('Install Prerequisites on Jenkins Server') {
             steps {
                 script {
