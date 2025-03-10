@@ -1,4 +1,3 @@
-
 pipeline {
     agent any
 
@@ -9,13 +8,45 @@ pipeline {
         MAVEN_PATH = sh(script: 'which mvn', returnStdout: true).trim()
         CONTAINER_IMAGE = "${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}"
         ANSIBLE_INVENTORY = "/var/lib/jenkins/workspace/star-banking-pipeline/inventory.ini"
-        AWS_ACCESS_KEY_ID = credentials('AWS_ACCESS_KEY_ID')
-        AWS_SECRET_ACCESS_KEY = credentials('AWS_SECRET_ACCESS_KEY')
+        AWS_ACCESS_KEY_ID = credentials('Access_key_ID')
+        AWS_SECRET_ACCESS_KEY = credentials('Secret_access_key')
         AWS_REGION = "ap-south-1"
     }
 
     stages {
-        stage('Checkout') {
+        stage('Install Prerequisites on Jenkins Server') {
+            steps {
+                script {
+                    sh '''
+                        chmod +x jenkins-scripts/*.sh
+                        ./jenkins-scripts/install_git.sh
+                        ./jenkins-scripts/install_java.sh
+                        ./jenkins-scripts/install_maven.sh
+                        ./jenkins-scripts/install_docker.sh
+                        ./jenkins-scripts/install_awscli.sh
+                        ./jenkins-scripts/install_terraform.sh
+                        ./jenkins-scripts/install_ansible.sh
+                        ./jenkins-scripts/install_kubectl.sh
+                    '''
+                }
+            }
+        }
+
+        stage('Setup Kubernetes on Master & Worker Nodes') {
+            steps {
+                script {
+                    sh '''
+                        echo "Installing Kubernetes on Master Node..."
+                        ansible-playbook -i inventory.ini -b -m shell -a "bash /path/to/install_k8s_master.sh" -l k8s_master
+
+                        echo "Installing Kubernetes on Worker Nodes..."
+                        ansible-playbook -i inventory.ini -b -m shell -a "bash /path/to/install_k8s_worker.sh" -l k8s_worker
+                    '''
+                }
+            }
+        }
+
+        stage('Checkout Code') {
             steps {
                 checkout([$class: 'GitSCM',
                     branches: [[name: '*/master']], 
@@ -34,18 +65,10 @@ pipeline {
                         export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
                         export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
                         export AWS_REGION=${AWS_REGION}
-                        aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
-                        aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+                        aws configure set aws_access_key $AWS_ACCESS_KEY_ID
+                        aws configure set aws_secret_key $AWS_SECRET_ACCESS_KEY
                         aws configure set region $AWS_REGION
                     '''
-                }
-            }
-        }
-
-        stage('Check AWS Credentials') {
-            steps {
-                script {
-                    sh 'aws sts get-caller-identity'
                 }
             }
         }
@@ -68,16 +91,16 @@ pipeline {
                     sh """
                         cat <<EOF > ${ANSIBLE_INVENTORY}
                         [k8s_master]
-                        172.31.15.176 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/assign-key-mumbai.pem ansible_connection=ssh
+                        <master_private_ip> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
 
                         [k8s_worker]
-                        172.31.0.42 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/assign-key-mumbai.pem ansible_connection=ssh
+                        <worker_private_ip> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
 
                         [monitoring]
-                        172.31.34.38 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/assign-key-mumbai.pem ansible_connection=ssh
+                        <monitoring_private_ip> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
 
                         [jenkins]
-                        172.31.47.191 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/assign-key-mumbai.pem ansible_connection=ssh
+                        <jenkins_private_ip> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
 
                         [all:vars]
                         ansible_ssh_common_args='-o StrictHostKeyChecking=no'
@@ -87,45 +110,19 @@ pipeline {
             }
         }
 
-        stage('Compile with Maven') {
+        stage('Build with Maven') {
             steps {
                 sh '''
                     set -e
+                    ${MAVEN_PATH} clean package
                     ${MAVEN_PATH} compile
-                '''
-            }
-        }
-
-        stage('Test with Maven') {
-            steps {
-                sh '''
-                    set -e
                     ${MAVEN_PATH} test
-                '''
-            }
-        }
-
-        stage('Install with Maven') {
-            steps {
-                sh '''
-                    set -e
+                    ${MAVEN_PATH} package
                     ${MAVEN_PATH} install
                 '''
             }
         }
 
-        stage('Package with Maven') {
-    steps {
-        sh '''
-            set -e
-            ${MAVEN_PATH} clean package
-            ${MAVEN_PATH} compile
-            ${MAVEN_PATH} test
-            ${MAVEN_PATH} package
-            ${MAVEN_PATH} install
-        '''
-    }
-}
         stage('Build Docker Image') {
             steps {
                 sh '''
@@ -160,3 +157,4 @@ pipeline {
         }
     }
 }
+
