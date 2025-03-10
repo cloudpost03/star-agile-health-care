@@ -10,7 +10,7 @@ pipeline {
     stages {
         stage('Checkout Code') {
             steps {
-                git branch: 'main', credentialsId: 'bitbucket-credentials', url: 'git@bitbucket.org:your-repo.git'
+                git branch: 'master', credentialsId: 'github-credentials', url: 'https://github.com/cloudpost03/star-agile-health-care.git'
             }
         }
 
@@ -38,6 +38,12 @@ pipeline {
                     sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
                     sh 'docker push ${IMAGE_NAME}:${IMAGE_TAG}'
                 }
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                sh 'kubectl apply -f k8s/deployment.yaml'
             }
         }
     }
