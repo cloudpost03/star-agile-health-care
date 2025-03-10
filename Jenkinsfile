@@ -7,26 +7,47 @@ pipeline {
         DOCKER_REGISTRY = "pravinkr11"
         MAVEN_PATH = sh(script: 'which mvn', returnStdout: true).trim()
         CONTAINER_IMAGE = "${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}"
-        ANSIBLE_INVENTORY = "/var/lib/jenkins/workspace/star-banking-pipeline/inventory.ini"
+        ANSIBLE_INVENTORY = "${WORKSPACE}/inventory.ini"
         AWS_ACCESS_KEY_ID = credentials('Access_key_ID')
         AWS_SECRET_ACCESS_KEY = credentials('Secret_access_key')
         AWS_REGION = "ap-south-1"
     }
 
     stages {
+        stage('Cleanup Workspace') {
+            steps {
+                cleanWs()
+            }
+        }
+
+        stage('Checkout Code') {
+            steps {
+                checkout([$class: 'GitSCM',
+                    branches: [[name: '*/master']],
+                    userRemoteConfigs: [[
+                        url: 'https://github.com/cloudpost03/star-agile-health-care.git',
+                        credentialsId: 'github_cred'
+                    ]]
+                ])
+            }
+        }
+
+        stage('Ensure Scripts Directory Exists') {
+            steps {
+                script {
+                    if (!fileExists('jenkins-scripts/')) {
+                        error 'jenkins-scripts/ directory is missing! Ensure it exists in the repository.'
+                    }
+                }
+            }
+        }
+
         stage('Install Prerequisites on Jenkins Server') {
             steps {
                 script {
                     sh '''
                         chmod +x jenkins-scripts/*.sh
-                        ./jenkins-scripts/install_git.sh
-                        ./jenkins-scripts/install_java.sh
-                        ./jenkins-scripts/install_maven.sh
-                        ./jenkins-scripts/install_docker.sh
-                        ./jenkins-scripts/install_awscli.sh
-                        ./jenkins-scripts/install_terraform.sh
-                        ./jenkins-scripts/install_ansible.sh
-                        ./jenkins-scripts/install_kubectl.sh
+                        jenkins-scripts/install_dependencies.sh
                     '''
                 }
             }
@@ -36,25 +57,10 @@ pipeline {
             steps {
                 script {
                     sh '''
-                        echo "Installing Kubernetes on Master Node..."
-                        ansible-playbook -i inventory.ini -b -m shell -a "bash /path/to/install_k8s_master.sh" -l k8s_master
-
-                        echo "Installing Kubernetes on Worker Nodes..."
-                        ansible-playbook -i inventory.ini -b -m shell -a "bash /path/to/install_k8s_worker.sh" -l k8s_worker
+                        jenkins-scripts/setup_k8s_master.sh
+                        jenkins-scripts/setup_k8s_worker.sh
                     '''
                 }
-            }
-        }
-
-        stage('Checkout Code') {
-            steps {
-                checkout([$class: 'GitSCM',
-                    branches: [[name: '*/master']], 
-                    userRemoteConfigs: [[
-                        url: 'https://github.com/cloudpost03/star-agile-health-care.git',
-                        credentialsId: 'github_cred'
-                    ]]]
-                )
             }
         }
 
@@ -65,8 +71,8 @@ pipeline {
                         export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
                         export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
                         export AWS_REGION=${AWS_REGION}
-                        aws configure set aws_access_key $AWS_ACCESS_KEY_ID
-                        aws configure set aws_secret_key $AWS_SECRET_ACCESS_KEY
+                        aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+                        aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
                         aws configure set region $AWS_REGION
                     '''
                 }
@@ -91,16 +97,16 @@ pipeline {
                     sh """
                         cat <<EOF > ${ANSIBLE_INVENTORY}
                         [k8s_master]
-                        <master_private_ip> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
+                        <private-ip-master> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
 
                         [k8s_worker]
-                        <worker_private_ip> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
+                        <private-ip-worker> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
 
                         [monitoring]
-                        <monitoring_private_ip> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
+                        <private-ip-monitoring> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
 
                         [jenkins]
-                        <jenkins_private_ip> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
+                        <private-ip-jenkins> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
 
                         [all:vars]
                         ansible_ssh_common_args='-o StrictHostKeyChecking=no'
@@ -113,12 +119,7 @@ pipeline {
         stage('Build with Maven') {
             steps {
                 sh '''
-                    set -e
                     ${MAVEN_PATH} clean package
-                    ${MAVEN_PATH} compile
-                    ${MAVEN_PATH} test
-                    ${MAVEN_PATH} package
-                    ${MAVEN_PATH} install
                 '''
             }
         }
@@ -126,7 +127,6 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 sh '''
-                    set -e
                     docker build -t ${CONTAINER_IMAGE} .
                 '''
             }
@@ -137,7 +137,6 @@ pipeline {
                 script {
                     withDockerRegistry([credentialsId: 'dockerhub_cred', url: 'https://index.docker.io/v1/']) {
                         sh '''
-                            set -e
                             docker push ${CONTAINER_IMAGE}
                         '''
                     }
@@ -149,12 +148,10 @@ pipeline {
             steps {
                 script {
                     sh '''
-                        set -e
-                        ansible-playbook -i ${ANSIBLE_INVENTORY} ansible/ansible-playbook.yml
+                        ansible-playbook -i ${ANSIBLE_INVENTORY} ansible/deploy.yml
                     '''
                 }
             }
         }
     }
 }
-
