@@ -35,19 +35,19 @@ pipeline {
 stage('Ensure Scripts Directory Exists') {
     steps {
         script {
-            if (!fileExists('jenkins-scripts/')) {
-                sh 'mkdir -p jenkins-scripts/'
+            if (!fileExists('jenkins-script/')) {
+                sh 'mkdir -p jenkins-script/'
             }
         }
     }
 }
-stage('Copy Scripts to Workspace') {
+stage('Copy Script to Workspace') {
     steps {
         script {
             sh '''
-                mkdir -p /var/lib/jenkins/workspace/healthcare/jenkins-scripts/
-                cp -r jenkins-scripts/* /var/lib/jenkins/workspace/healthcare/jenkins-scripts/
-                chmod -R 755 /var/lib/jenkins/workspace/healthcare/jenkins-scripts/
+                mkdir -p /var/lib/jenkins/workspace/healthcare/jenkins-script/
+                cp -r jenkins-script/* /var/lib/jenkins/workspace/healthcare/jenkins-script/
+                chmod -R 755 /var/lib/jenkins/workspace/healthcare/jenkins-script/
             '''
         }
     }
@@ -57,8 +57,8 @@ stage('Copy Scripts to Workspace') {
             steps {
                 script {
                     sh '''
-                        chmod +x jenkins-scripts/*.sh
-                        jenkins-scripts/install_dependencies.sh
+                        chmod +x jenkins-script/*.sh
+                        jenkins-script/install_dependencies.sh
                     '''
                 }
             }
@@ -68,8 +68,8 @@ stage('Copy Scripts to Workspace') {
             steps {
                 script {
                     sh '''
-                        jenkins-scripts/setup_k8s_master.sh
-                        jenkins-scripts/setup_k8s_worker.sh
+                        jenkins-script/setup_k8s_master.sh
+                        jenkins-script/setup_k8s_worker.sh
                     '''
                 }
             }
