@@ -2,88 +2,49 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_IMAGE = "pravinkr11/star-health:latest"
+        IMAGE_NAME = 'pravinkr11/star-health'
+        IMAGE_TAG = 'latest'
+        DOCKERHUB_CREDENTIALS = 'docker-hub-credentials'  // Jenkins credentials ID
     }
 
     stages {
-
-        stage('Initialize') {
+        stage('Checkout Code') {
             steps {
-                script {
-                    echo "🚀 Starting CI/CD Pipeline..."
-                    sh 'whoami && pwd'
-                }
+                git branch: 'main', credentialsId: 'bitbucket-credentials', url: 'git@bitbucket.org:your-repo.git'
             }
         }
 
-        stage('Install Dependencies') {
+        stage('Build Application') {
             steps {
-                sh '''
-                chmod +x jenkins-scripts/*.sh
-                ./jenkins-scripts/install_dependencies.sh
-                '''
+                sh 'mvn clean package -DskipTests'
             }
         }
 
-        stage('Fix Docker Permissions') {
+        stage('Verify JAR File') {
             steps {
-                sh '''
-                sudo usermod -aG docker jenkins
-                sudo chmod 666 /var/run/docker.sock
-                '''
-            }
-        }
-
-        stage('Install Kubernetes Tools') {
-            steps {
-                sh '''
-                sudo rm -f /etc/apt/sources.list.d/kubernetes.list
-                sudo apt-get update -y
-                sudo apt-get install -y apt-transport-https ca-certificates curl
-                sudo mkdir -p /etc/apt/keyrings
-                curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.28/deb/Release.key | sudo tee /etc/apt/keyrings/kubernetes-apt-keyring.asc >/dev/null
-                echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.asc] https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list
-                sudo apt-get update -y
-                sudo apt-get install -y kubectl kubelet kubeadm
-                '''
+                sh 'ls -l target/'
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                sh '''
-                docker build -t $DOCKER_IMAGE .
-                '''
+                sh 'docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .'
             }
         }
 
-        stage('Push Docker Image') {
+        stage('Push Docker Image to Docker Hub') {
             steps {
-                withDockerRegistry([credentialsId: 'docker-hub-credentials', url: '']) {
-                    sh '''
-                    docker login -u pravinkr11 -p ${DOCKER_PASSWORD}
-                    docker push $DOCKER_IMAGE
-                    '''
+                withCredentials([usernamePassword(credentialsId: "${DOCKERHUB_CREDENTIALS}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                    sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
+                    sh 'docker push ${IMAGE_NAME}:${IMAGE_TAG}'
                 }
-            }
-        }
-
-        stage('Deploy to Kubernetes') {
-            steps {
-                sh '''
-                kubectl apply -f k8s/deployment.yaml
-                kubectl apply -f k8s/service.yaml
-                '''
             }
         }
     }
 
     post {
-        success {
-            echo "✅ Pipeline executed successfully!"
-        }
-        failure {
-            echo "❌ Pipeline failed. Check logs for errors."
+        always {
+            echo "Pipeline execution completed!"
         }
     }
 }
