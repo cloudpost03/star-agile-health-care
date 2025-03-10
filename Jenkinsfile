@@ -41,6 +41,18 @@ stage('Ensure Scripts Directory Exists') {
         }
     }
 }
+stage('Copy Scripts to Workspace') {
+    steps {
+        script {
+            sh '''
+                mkdir -p /var/lib/jenkins/workspace/healthcare/jenkins-scripts/
+                cp -r jenkins-scripts/* /var/lib/jenkins/workspace/healthcare/jenkins-scripts/
+                chmod -R 755 /var/lib/jenkins/workspace/healthcare/jenkins-scripts/
+            '''
+        }
+    }
+}
+    
         stage('Install Prerequisites on Jenkins Server') {
             steps {
                 script {
