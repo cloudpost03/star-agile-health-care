@@ -67,8 +67,8 @@ pipeline {
             steps {
                 script {
                     sh '''
-                        /var/lib/jenkins/workspace/healthcare/jenkins-scripts/setup_k8s_master.sh
-                        /var/lib/jenkins/workspace/healthcare/jenkins-scripts/setup_k8s_worker.sh
+                        /var/lib/jenkins/workspace/healthcare/jenkins-scripts/install_k8s_master.sh
+                        /var/lib/jenkins/workspace/healthcare/jenkins-scripts/install_k8s_worker.sh
                     '''
                 }
             }
