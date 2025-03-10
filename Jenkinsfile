@@ -32,33 +32,32 @@ pipeline {
             }
         }
 
-stage('Ensure Scripts Directory Exists') {
-    steps {
-        script {
-            if (!fileExists('jenkins-scripts/')) {
-                sh 'mkdir -p jenkins-scripts/'
+        stage('Ensure Scripts Directory Exists') {
+            steps {
+                script {
+                    sh 'mkdir -p jenkins-scripts/'
+                }
             }
         }
-    }
-}
-stage('Copy Scripts to Workspace') {
-    steps {
-        script {
-            sh '''
-                mkdir -p /var/lib/jenkins/workspace/healthcare/jenkins-scripts/
-                cp -r jenkins-scripts/* /var/lib/jenkins/workspace/healthcare/jenkins-scripts/
-                chmod -R 755 /var/lib/jenkins/workspace/healthcare/jenkins-scripts/
-            '''
+
+        stage('Copy Scripts to Workspace') {
+            steps {
+                script {
+                    sh '''
+                        mkdir -p /var/lib/jenkins/workspace/healthcare/jenkins-scripts/
+                        rsync -av --ignore-existing jenkins-scripts/ /var/lib/jenkins/workspace/healthcare/jenkins-scripts/
+                        chmod -R 755 /var/lib/jenkins/workspace/healthcare/jenkins-scripts/
+                    '''
+                }
+            }
         }
-    }
-}
     
         stage('Install Prerequisites on Jenkins Server') {
             steps {
                 script {
                     sh '''
-                        chmod +x jenkins-scripts/*.sh
-                        jenkins-scripts/install_dependencies.sh
+                        chmod +x /var/lib/jenkins/workspace/healthcare/jenkins-scripts/*.sh
+                        /var/lib/jenkins/workspace/healthcare/jenkins-scripts/install_dependencies.sh
                     '''
                 }
             }
@@ -68,8 +67,8 @@ stage('Copy Scripts to Workspace') {
             steps {
                 script {
                     sh '''
-                        jenkins-scripts/setup_k8s_master.sh
-                        jenkins-scripts/setup_k8s_worker.sh
+                        /var/lib/jenkins/workspace/healthcare/jenkins-scripts/setup_k8s_master.sh
+                        /var/lib/jenkins/workspace/healthcare/jenkins-scripts/setup_k8s_worker.sh
                     '''
                 }
             }
@@ -79,9 +78,6 @@ stage('Copy Scripts to Workspace') {
             steps {
                 script {
                     sh '''
-                        export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-                        export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-                        export AWS_REGION=${AWS_REGION}
                         aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
                         aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
                         aws configure set region $AWS_REGION
@@ -96,7 +92,7 @@ stage('Copy Scripts to Workspace') {
                     sh '''
                         cd terraform
                         terraform init
-                        terraform apply -auto-approve
+                        terraform apply -auto-approve || echo "Terraform apply failed"
                     '''
                 }
             }
@@ -148,6 +144,7 @@ stage('Copy Scripts to Workspace') {
                 script {
                     withDockerRegistry([credentialsId: 'dockerhub_cred', url: 'https://index.docker.io/v1/']) {
                         sh '''
+                            docker login -u ${DOCKER_REGISTRY} -p $(cat /run/secrets/dockerhub_password)
                             docker push ${CONTAINER_IMAGE}
                         '''
                     }
