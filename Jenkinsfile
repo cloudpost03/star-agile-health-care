@@ -60,8 +60,8 @@ pipeline {
         stage('Setup Kubernetes on Master & Worker Nodes') {
             steps {
                 sh """
-                    ${SCRIPTS_DIR}/setup_k8s_master.sh
-                    ${SCRIPTS_DIR}/setup_k8s_worker.sh
+                    ${SCRIPTS_DIR}/install_k8s_master.sh
+                    ${SCRIPTS_DIR}/install_k8s_worker.sh
                 """
             }
         }
