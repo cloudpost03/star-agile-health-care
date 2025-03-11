@@ -141,14 +141,15 @@ pipeline {
         }
 
         stage('Deploy Application using Ansible') {
-            steps {
-                script {
-                    if (!fileExists("ansible/deploy.yml")) {
-                        error "ERROR: ansible/deploy.yml not found!"
-                    }
-                    sh "ansible-playbook -i ${ANSIBLE_INVENTORY} ansible/deploy.yml"
-                }
+    steps {
+        script {
+            def deployFilePath = "${WORKSPACE}/ansible/deploy.yml"
+            if (!fileExists(deployFilePath)) {
+                error "ERROR: ansible/deploy.yml not found in workspace! Check repository and try again."
+            }
+            sh "ansible-playbook -i ${ANSIBLE_INVENTORY} ${deployFilePath}"
             }
         }
     }
+}
 }
