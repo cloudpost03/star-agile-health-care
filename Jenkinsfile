@@ -33,70 +33,14 @@ pipeline {
             }
         }
 
-        stage('Ensure Scripts Directory Exists') {
-            steps {
-                script {
-                    sh "mkdir -p ${SCRIPTS_DIR}"
-                }
-            }
-        }
-
-        stage('Copy Scripts to Workspace') {
-            steps {
-                script {
-                    sh """
-                        rsync -av jenkins-scripts/ ${SCRIPTS_DIR}/
-                        chmod -R 755 ${SCRIPTS_DIR}/
-                    """
-                }
-            }
-        }
-
-        stage('Install Prerequisites on Jenkins Server') {
-            steps {
-                script {
-                    sh """
-                        chmod +x ${SCRIPTS_DIR}/*.sh
-                        ${SCRIPTS_DIR}/install_dependencies.sh
-                    """
-                }
-            }
-        }
-
-        stage('Setup Kubernetes on Master & Worker Nodes') {
-            steps {
-                script {
-                    sh """
-                        ${SCRIPTS_DIR}/setup_k8s_master.sh
-                        ${SCRIPTS_DIR}/setup_k8s_worker.sh
-                    """
-                }
-            }
-        }
-
-        stage('Configure AWS Credentials') {
-            steps {
-                script {
-                    sh """
-                        export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-                        export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-                        export AWS_REGION=${AWS_REGION}
-                        aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
-                        aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
-                        aws configure set region $AWS_REGION
-                    """
-                }
-            }
-        }
-
         stage('Terraform Init & Apply') {
             steps {
                 script {
-                    sh """
+                    sh '''
                         cd terraform
                         terraform init
                         terraform apply -auto-approve
-                    """
+                    '''
                 }
             }
         }
@@ -104,10 +48,10 @@ pipeline {
         stage('Fetch EC2 Private IPs') {
             steps {
                 script {
-                    env.K8S_MASTER_IP = sh(script: "cd terraform && terraform output -raw k8s_master_private_ip", returnStdout: true).trim()
-                    env.K8S_WORKER_IPS = sh(script: "cd terraform && terraform output -json k8s_worker_private_ips | jq -r '.[]'", returnStdout: true).trim()
-                    env.MONITORING_IP = sh(script: "cd terraform && terraform output -raw monitoring_private_ip", returnStdout: true).trim()
-                    env.JENKINS_IP = sh(script: "cd terraform && terraform output -raw jenkins_private_ip", returnStdout: true).trim()
+                    env.K8S_MASTER_IP = sh(script: "terraform output -raw master_private_ip", returnStdout: true).trim()
+                    env.K8S_WORKER_IPS = sh(script: "terraform output -json worker_private_ips | jq -r '.[]'", returnStdout: true).trim()
+                    env.MONITORING_IP = sh(script: "terraform output -raw monitoring_private_ip", returnStdout: true).trim()
+                    env.JENKINS_IP = sh(script: "curl -s http://169.254.169.254/latest/meta-data/local-ipv4", returnStdout: true).trim()
                 }
             }
         }
@@ -137,21 +81,40 @@ pipeline {
             }
         }
 
+        stage('Update /etc/hosts on Jenkins Server') {
+            steps {
+                script {
+                    sh """
+                        echo "Updating /etc/hosts with Kubernetes nodes"
+                        sudo sed -i '/# K8s Cluster Hosts Start/,/# K8s Cluster Hosts End/d' /etc/hosts
+                        
+                        echo "# K8s Cluster Hosts Start" | sudo tee -a /etc/hosts
+                        echo "${K8S_MASTER_IP}  k8s-master" | sudo tee -a /etc/hosts
+                        
+                        for worker in ${K8S_WORKER_IPS}; do
+                            echo "\$worker  k8s-worker" | sudo tee -a /etc/hosts
+                        done
+                        
+                        echo "${MONITORING_IP}  k8s-monitoring" | sudo tee -a /etc/hosts
+                        echo "${JENKINS_IP}  jenkins-server" | sudo tee -a /etc/hosts
+                        echo "# K8s Cluster Hosts End" | sudo tee -a /etc/hosts
+                        
+                        cat /etc/hosts
+                    """
+                }
+            }
+        }
+
         stage('Build with Maven') {
             steps {
                 sh "${MAVEN_PATH} clean package"
             }
         }
 
-        stage('Build Docker Image') {
-            steps {
-                sh "docker build -t ${CONTAINER_IMAGE} ."
-            }
-        }
-
-        stage('Push Docker Image') {
+        stage('Build & Push Docker Image') {
             steps {
                 script {
+                    sh "docker build -t ${CONTAINER_IMAGE} ."
                     withDockerRegistry([credentialsId: 'dockerhub_cred', url: 'https://index.docker.io/v1/']) {
                         sh "docker push ${CONTAINER_IMAGE}"
                     }
