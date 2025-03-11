@@ -15,4 +15,4 @@
       command: systemctl start docker
 
     - name: Deploy Docker Container
-      command: docker run -itd -p 8081:8081 pravinkr11/star-banking:latest
+      command: docker run -itd -p 8082:8082 pravinkr11/star-health:latest
