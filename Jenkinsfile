@@ -101,22 +101,33 @@ pipeline {
             }
         }
 
+        stage('Fetch EC2 Private IPs') {
+            steps {
+                script {
+                    env.K8S_MASTER_IP = sh(script: "cd terraform && terraform output -raw k8s_master_private_ip", returnStdout: true).trim()
+                    env.K8S_WORKER_IPS = sh(script: "cd terraform && terraform output -json k8s_worker_private_ips | jq -r '.[]'", returnStdout: true).trim()
+                    env.MONITORING_IP = sh(script: "cd terraform && terraform output -raw monitoring_private_ip", returnStdout: true).trim()
+                    env.JENKINS_IP = sh(script: "cd terraform && terraform output -raw jenkins_private_ip", returnStdout: true).trim()
+                }
+            }
+        }
+
         stage('Generate Ansible Inventory') {
             steps {
                 script {
                     sh """
                         cat <<EOF > ${ANSIBLE_INVENTORY}
                         [k8s_master]
-                        <private-ip-master> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
+                        ${K8S_MASTER_IP} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_ed25519 ansible_connection=ssh
 
                         [k8s_worker]
-                        <private-ip-worker> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
+                        ${K8S_WORKER_IPS} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_ed25519 ansible_connection=ssh
 
                         [monitoring]
-                        <private-ip-monitoring> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
+                        ${MONITORING_IP} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_ed25519 ansible_connection=ssh
 
                         [jenkins]
-                        <private-ip-jenkins> ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
+                        ${JENKINS_IP} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_ed25519 ansible_connection=ssh
 
                         [all:vars]
                         ansible_ssh_common_args='-o StrictHostKeyChecking=no'
