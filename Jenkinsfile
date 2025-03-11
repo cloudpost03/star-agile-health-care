@@ -11,7 +11,7 @@ pipeline {
         AWS_ACCESS_KEY_ID = credentials('Access_key_ID')
         AWS_SECRET_ACCESS_KEY = credentials('Secret_access_key')
         AWS_REGION = "ap-south-1"
-        SCRIPTS_DIR = "/var/lib/jenkins/workspace/healthcare/jenkins-scripts"
+        SCRIPTS_DIR = "/var/lib/jenkins/workspace/star-agile-health-care/jenkins-scripts"
     }
 
     stages {
