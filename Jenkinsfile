@@ -11,7 +11,7 @@ pipeline {
         AWS_ACCESS_KEY_ID = credentials('Access_key_ID')
         AWS_SECRET_ACCESS_KEY = credentials('Secret_access_key')
         AWS_REGION = "ap-south-1"
-        SCRIPTS_DIR = "/var/lib/jenkins/workspace/star-agile-health-care/jenkins-scripts"
+        SCRIPTS_DIR = "/var/lib/jenkins/workspace/healthcare/jenkins-scripts"
     }
 
     stages {
@@ -33,73 +33,86 @@ pipeline {
             }
         }
 
-        stage('Terraform Init & Apply') {
+        stage('Ensure Scripts Directory Exists') {
             steps {
-                script {
-                    sh '''
-                        cd terraform
-                        terraform init
-                        terraform apply -auto-approve
-                    '''
-                }
+                sh "mkdir -p ${SCRIPTS_DIR}"
             }
         }
 
-        stage('Fetch EC2 Private IPs') {
+        stage('Copy Scripts to Workspace') {
             steps {
-                script {
-                    env.K8S_MASTER_IP = sh(script: "terraform output -raw master_private_ip", returnStdout: true).trim()
-                    env.K8S_WORKER_IPS = sh(script: "terraform output -json worker_private_ips | jq -r '.[]'", returnStdout: true).trim()
-                    env.MONITORING_IP = sh(script: "terraform output -raw monitoring_private_ip", returnStdout: true).trim()
-                    env.JENKINS_IP = sh(script: "curl -s http://169.254.169.254/latest/meta-data/local-ipv4", returnStdout: true).trim()
-                }
+                sh """
+                    rsync -av jenkins-scripts/ ${SCRIPTS_DIR}/
+                    chmod -R 755 ${SCRIPTS_DIR}/
+                """
+            }
+        }
+
+        stage('Install Prerequisites on Jenkins Server') {
+            steps {
+                sh """
+                    chmod +x ${SCRIPTS_DIR}/*.sh
+                    ${SCRIPTS_DIR}/install_dependencies.sh
+                """
+            }
+        }
+
+        stage('Setup Kubernetes on Master & Worker Nodes') {
+            steps {
+                sh """
+                    ${SCRIPTS_DIR}/setup_k8s_master.sh
+                    ${SCRIPTS_DIR}/setup_k8s_worker.sh
+                """
+            }
+        }
+
+        stage('Configure AWS Credentials') {
+            steps {
+                sh """
+                    export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+                    export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+                    export AWS_REGION=${AWS_REGION}
+                    aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+                    aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+                    aws configure set region $AWS_REGION
+                """
+            }
+        }
+
+        stage('Terraform Init & Apply') {
+            steps {
+                sh """
+                    sudo apt-get install -y jq  # Install jq if not present
+                    cd terraform
+                    terraform init
+                    terraform apply -auto-approve
+                """
             }
         }
 
         stage('Generate Ansible Inventory') {
             steps {
                 script {
-                    sh """
-                        cat <<EOF > ${ANSIBLE_INVENTORY}
-                        [k8s_master]
-                        ${K8S_MASTER_IP} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_ed25519 ansible_connection=ssh
+                    def master_ip = sh(script: "terraform output -raw master_private_ip", returnStdout: true).trim()
+                    def worker_ips = sh(script: "terraform output -json worker_private_ips | jq -r '.[]'", returnStdout: true).trim()
+                    def monitoring_ip = sh(script: "terraform output -raw monitoring_private_ip", returnStdout: true).trim()
+                    def jenkins_ip = sh(script: "curl -s http://169.254.169.254/latest/meta-data/local-ipv4", returnStdout: true).trim()
 
-                        [k8s_worker]
-                        ${K8S_WORKER_IPS} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_ed25519 ansible_connection=ssh
+                    writeFile file: "${ANSIBLE_INVENTORY}", text: """
+                    [k8s_master]
+                    ${master_ip} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
 
-                        [monitoring]
-                        ${MONITORING_IP} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_ed25519 ansible_connection=ssh
+                    [k8s_worker]
+                    ${worker_ips.replaceAll("\n", "\n")} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
 
-                        [jenkins]
-                        ${JENKINS_IP} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_ed25519 ansible_connection=ssh
+                    [monitoring]
+                    ${monitoring_ip} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
 
-                        [all:vars]
-                        ansible_ssh_common_args='-o StrictHostKeyChecking=no'
-                        EOF
-                    """
-                }
-            }
-        }
+                    [jenkins]
+                    ${jenkins_ip} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/Mumbai-key1.pem ansible_connection=ssh
 
-        stage('Update /etc/hosts on Jenkins Server') {
-            steps {
-                script {
-                    sh """
-                        echo "Updating /etc/hosts with Kubernetes nodes"
-                        sudo sed -i '/# K8s Cluster Hosts Start/,/# K8s Cluster Hosts End/d' /etc/hosts
-                        
-                        echo "# K8s Cluster Hosts Start" | sudo tee -a /etc/hosts
-                        echo "${K8S_MASTER_IP}  k8s-master" | sudo tee -a /etc/hosts
-                        
-                        for worker in ${K8S_WORKER_IPS}; do
-                            echo "\$worker  k8s-worker" | sudo tee -a /etc/hosts
-                        done
-                        
-                        echo "${MONITORING_IP}  k8s-monitoring" | sudo tee -a /etc/hosts
-                        echo "${JENKINS_IP}  jenkins-server" | sudo tee -a /etc/hosts
-                        echo "# K8s Cluster Hosts End" | sudo tee -a /etc/hosts
-                        
-                        cat /etc/hosts
+                    [all:vars]
+                    ansible_ssh_common_args='-o StrictHostKeyChecking=no'
                     """
                 }
             }
@@ -111,10 +124,15 @@ pipeline {
             }
         }
 
-        stage('Build & Push Docker Image') {
+        stage('Build Docker Image') {
+            steps {
+                sh "docker build -t ${CONTAINER_IMAGE} ."
+            }
+        }
+
+        stage('Push Docker Image') {
             steps {
                 script {
-                    sh "docker build -t ${CONTAINER_IMAGE} ."
                     withDockerRegistry([credentialsId: 'dockerhub_cred', url: 'https://index.docker.io/v1/']) {
                         sh "docker push ${CONTAINER_IMAGE}"
                     }
@@ -125,6 +143,9 @@ pipeline {
         stage('Deploy Application using Ansible') {
             steps {
                 script {
+                    if (!fileExists("ansible/deploy.yml")) {
+                        error "ERROR: ansible/deploy.yml not found!"
+                    }
                     sh "ansible-playbook -i ${ANSIBLE_INVENTORY} ansible/deploy.yml"
                 }
             }
